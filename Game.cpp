@@ -12,11 +12,13 @@ Paddle::Paddle(Vector2 pos, int up, int down, float screenHeight) : upKey(up), d
 
 void Paddle::Update(float deltaTime)
 {
+	/*
 	if (IsKeyDown(upKey)) position.y -= speed * deltaTime;
 	if (IsKeyDown(downKey)) position.y += speed * deltaTime;
 
 	if (position.y < 0) position.y = 0;
 	if (position.y + height > screenHeight) position.y = screenHeight - height;
+	*/
 
 	// Handle size boost expiration
 	if (sizeBoostActive)
@@ -138,7 +140,26 @@ void Game::Reset()
 	objects.push_back(paddles[0]);
 	objects.push_back(paddles[1]);
 
+	gameOver = false;
+
 	SpawnBall();
+}
+
+// I don't love this but it is what it is
+void Game::ResetPrevState()
+{
+	for (auto obj : objects)
+		delete obj;
+
+	objects.clear();
+
+	scores[0] = 0;
+	scores[1] = 0;
+
+	paddles[0] = new Paddle({ 50, screenHeight / 2 - 50 }, KEY_W, KEY_S, screenHeight);
+	paddles[1] = new Paddle({ screenWidth - 70, screenHeight / 2 - 50 }, KEY_UP, KEY_DOWN, screenHeight);
+	objects.push_back(paddles[0]);
+	objects.push_back(paddles[1]);
 }
 
 void Game::SpawnBall()
@@ -147,12 +168,131 @@ void Game::SpawnBall()
 	objects.push_back(new Ball({ screenWidth / 2, screenHeight / 2 }, vel, { screenWidth, screenHeight }, paddles[0], paddles[1], scores, MAX_VELOCITY));
 }
 
-void Game::Update()
+void Game::ApplyInput(int player, InputCommand input) 
 {
-	float deltaTime = GetFrameTime();
+	if (input == InputCommand::Restart)
+	{
+		Reset();
+		gameOver = false;
+		winner = -1;
+		return;
+	}
+	
+	Paddle* paddle = paddles[player];
+	if (input == InputCommand::Up)
+		paddle->position.y -= paddle->speed * GetFrameTime();
+	
+	if (input == InputCommand::Down) 
+		paddle->position.y += paddle->speed * GetFrameTime();
+
+	if (paddle->position.y < 0) paddle->position.y = 0;
+	if (paddle->position.y + paddle->height > screenHeight)
+		paddle->position.y = screenHeight - paddle->height;
+}
+
+GameState Game::GetState() const {
+	GameState state;
+
+	// Copy paddle positions
+	for (int i = 0; i < 2; i++) {
+		state.paddlePositions[i] = paddles[i]->position;
+		state.paddleHeights[i] = paddles[i]->height;
+	}
+
+	// Copy scores
+	state.scores[0] = scores[0];
+	state.scores[1] = scores[1];
+
+	// Copy balls
+	int ballIndex = 0;
+	for (GameObject* obj : objects) 
+	{
+		Ball* ball = dynamic_cast<Ball*>(obj);
+		if (ball && ballIndex < GameState::MAX_BALLS) 
+		{
+			state.ballPositions[ballIndex] = ball->position;
+			state.ballVelocities[ballIndex] = ball->velocity;
+			state.ballActive[ballIndex] = ball->active;
+			ballIndex++;
+		}
+	}
+
+	for (int i = ballIndex; i < GameState::MAX_BALLS; i++) {
+		state.ballActive[i] = false;
+	}
+
+	// Copy powerups
+	int powerupIndex = 0;
+	for (GameObject* obj : objects) 
+	{
+		Powerup* powerup = dynamic_cast<Powerup*>(obj);
+		if (powerup && powerupIndex < GameState::MAX_POWERUPS)
+		{
+			state.powerups[powerupIndex].position = powerup->position;
+			state.powerups[powerupIndex].type = (int)powerup->type;
+			state.powerups[powerupIndex].active = powerup->active;
+			powerupIndex++;
+		}
+	}
+	for (int i = powerupIndex; i < GameState::MAX_POWERUPS; i++) 
+	{
+		state.powerups[i].active = false;
+	}
+
+	// Update win state
+	state.gameOver = gameOver;
+	state.winner = winner;
+
+	return state;
+}
+
+void Game::SetState(const GameState& state) {
+	ResetPrevState();
+
+	// Update paddles
+	for (int i = 0; i < 2; i++) {
+		paddles[i]->position = state.paddlePositions[i];
+		paddles[i]->height = state.paddleHeights[i];
+	}
+
+	// Update scores
+	scores[0] = state.scores[0];
+	scores[1] = state.scores[1];
+
+	// Update balls
+	for (int i = 0; i < GameState::MAX_BALLS; i++) 
+	{
+		if (state.ballActive[i])
+		{
+			Ball* ball = new Ball(state.ballPositions[i], state.ballVelocities[i], { screenWidth, screenHeight }, paddles[0], paddles[1], scores, MAX_VELOCITY);
+			objects.push_back(ball);
+		}
+	}
+
+	// Update powerups
+	for (int i = 0; i < GameState::MAX_POWERUPS; i++) 
+	{
+		if (state.powerups[i].active) 
+		{
+			Powerup* powerup = new Powerup(state.powerups[i].position, (PowerupType)state.powerups[i].type);
+			objects.push_back(powerup);
+		}
+	}
+
+	// Update win state
+	gameOver = state.gameOver;
+	winner = state.winner;
+}
+
+void Game::Update(float deltaTime)
+{
+	if (gameOver)
+		return;
+
 
 	std::vector<size_t> ballIndices;
 	std::vector<size_t> powerupIndices;
+	std::vector<size_t> toDelete;
 
 	for (size_t i = 0; i < objects.size(); ++i)
 	{
@@ -170,34 +310,46 @@ void Game::Update()
 	}
 
 	HandlePowerupSpawning(deltaTime);
-	HandlePowerupCollisions(powerupIndices, ballIndices);
-	RemoveInactiveBalls(ballIndices);
+	HandlePowerupCollisions(powerupIndices, ballIndices, toDelete);
+	RemoveInactiveBalls(ballIndices, toDelete);
+
+	std::sort(toDelete.rbegin(), toDelete.rend());
+	for (size_t idx : toDelete)
+	{
+		if (idx >= objects.size()) continue;
+		delete objects[idx];
+		objects.erase(objects.begin() + idx);
+	}
+
+	int activeBallCount = 0;
+	for (GameObject* obj : objects)
+	{
+		Ball* ball = dynamic_cast<Ball*>(obj);
+		if (ball && ball->active) activeBallCount++;
+	}
+	if (activeBallCount == 0)
+		SpawnBall();
+
+	if (scores[0] >= WIN_SCORE || scores[1] >= WIN_SCORE)
+	{
+		gameOver = true;
+		winner = (scores[0] >= WIN_SCORE) ? 0 : 1;
+	}
 }
 
-void Game::RemoveInactiveBalls(const std::vector<size_t>& ballIndices)
+void Game::RemoveInactiveBalls(const std::vector<size_t>& ballIndices, std::vector<size_t>& toDelete)
 {
-	int activeBallCount = 0;
-
-	for (size_t i = 0; i < ballIndices.size(); ++i)
+	for (size_t idx : ballIndices)
 	{
-		size_t idx = ballIndices[i];
 		if (idx >= objects.size()) continue;
-
 		Ball* ball = dynamic_cast<Ball*>(objects[idx]);
 		if (!ball) continue;
 
 		if (!ball->active)
 		{
-			delete ball;
-			objects.erase(objects.begin() + idx);
-			continue;
+			toDelete.push_back(idx);
 		}
-
-		activeBallCount++;
 	}
-
-	if (activeBallCount == 0)
-		SpawnBall();
 }
 
 
@@ -215,13 +367,14 @@ void Game::HandlePowerupSpawning(float deltaTime)
 	}
 }
 
-void Game::HandlePowerupCollisions(const std::vector<size_t>& powerupIndices, const std::vector<size_t>& ballIndices)
+void Game::HandlePowerupCollisions(const std::vector<size_t>& powerupIndices, const std::vector<size_t>& ballIndices, std::vector<size_t>& toDelete)
 {
-	for (size_t pIdx : powerupIndices)
+	for (size_t pIdx = 0; pIdx < powerupIndices.size(); pIdx++)
 	{
-		if (pIdx >= objects.size()) continue;
+		size_t idx = powerupIndices[pIdx];
+		if (idx >= objects.size()) continue;
 
-		Powerup* powerup = dynamic_cast<Powerup*>(objects[pIdx]);
+		Powerup* powerup = dynamic_cast<Powerup*>(objects[idx]);
 		if (!powerup || !powerup->active) continue;
 
 		for (size_t bIdx : ballIndices)
@@ -229,11 +382,13 @@ void Game::HandlePowerupCollisions(const std::vector<size_t>& powerupIndices, co
 			if (bIdx >= objects.size()) continue;
 
 			Ball* ball = dynamic_cast<Ball*>(objects[bIdx]);
+			if (!ball || !ball->active) continue;
 
 			if (CheckCollisionCircles(ball->position, ball->radius, powerup->position, powerup->radius))
 			{
+				// Apply the powerup effect
 				ApplyPowerup(powerup, ball);
-				powerup->active = false;
+				toDelete.push_back(std::distance(objects.begin(), std::find(objects.begin(), objects.end(), powerup)));
 				break;
 			}
 		}
@@ -270,6 +425,13 @@ void Game::ApplyPowerup(Powerup* powerup, Ball* ball)
 
 void Game::Draw()
 {
+	if (gameOver)
+	{
+		const char* msg = TextFormat("Player %d Wins! Press R to Restart", winner + 1);
+		DrawText(msg, screenWidth / 2 - MeasureText(msg, 20) / 2, screenHeight / 2 - 10, 20, YELLOW);
+		return;
+	}
+
 	for (auto obj : objects)
 		obj->Draw();
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "raylib.h"
 #include <vector>
+#include "Gamestate.h"
 
 class GameObject {
 public:
@@ -75,22 +76,31 @@ public:
 	Game(float screenWidth, float screenHeight);
 	~Game();
 
-	void Update();
-	void RemoveInactiveBalls(const std::vector<size_t>& ballIndices);
-	void HandlePowerupSpawning(float deltaTime);
-	void HandlePowerupCollisions(const std::vector<size_t>& powerupIndices, const std::vector<size_t>& ballIndices);
-	void ApplyPowerup(Powerup* powerup, Ball* ball);
-	void Draw();
 	void Reset();
-	void SpawnBall();
+	void ResetPrevState();
+	void Update(float deltaTime);
+	void Draw();
+	void ApplyInput(int player, InputCommand input);
+
+	GameState GetState() const;
+	void SetState(const GameState& state);
 
 private:
 	float screenWidth, screenHeight;
 	Paddle* paddles[2];
 	std::vector<GameObject*> objects;
-	int scores[2] = { 0, 0 };
+	int scores[2];
 	Vector2 MAX_VELOCITY = { 700.0f, 400.0f };
+
+	bool gameOver = false;
+	int winner = -1;
+	const int WIN_SCORE = 15;
 	float powerupSpawnTimer = 0.0f;
 	float nextPowerupSpawnTime = 5.0f;
 
+	void SpawnBall();
+	void RemoveInactiveBalls(const std::vector<size_t>& ballIndices, std::vector<size_t>& toDelete);
+	void HandlePowerupSpawning(float deltaTime);
+	void HandlePowerupCollisions(const std::vector<size_t>& powerupIndices, const std::vector<size_t>& ballIndices, std::vector<size_t>& toDelete);
+	void ApplyPowerup(class Powerup* powerup, class Ball* ball);
 };

@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 26)
 
 add_executable(network_pong main.cpp
 
- "Game.cpp" "Game.h")
+ "Game.cpp" "Game.h" "Gamestate.cpp" "Gamestate.h")
 
 add_subdirectory(raylib)
 
